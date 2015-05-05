@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-msgpack/codec"
+	"github.com/hashicorp/govector/govec"
 )
 
 const (
@@ -34,6 +35,10 @@ var (
 
 	// ErrPipelineShutdown is returned when the pipeline is closed
 	ErrPipelineShutdown = errors.New("append pipeline closed")
+
+	appendEntrySend []byte
+	reqVoteSend []byte
+	snapshotSend []byte
 )
 
 /*
@@ -64,7 +69,7 @@ type NetworkTransport struct {
 	heartbeatFn     func(RPC)
 	heartbeatFnLock sync.Mutex
 
-	logger *log.Logger
+	logger *WrapperLogger
 
 	maxPool int
 
@@ -125,10 +130,20 @@ func NewNetworkTransport(
 	if logOutput == nil {
 		logOutput = os.Stderr
 	}
+
+	var logger *log.Logger = log.New(logOutput, "", log.LstdFlags)
+	vec_logger := govec.Initialize("raft_net " + stream.Addr().String(), "logfile" + stream.Addr().String())
+
+	// Create WrapperLogger struct
+	wrapper_logger := &WrapperLogger{
+		logger:       logger,
+		vec_logger:   vec_logger,
+	}
+
 	trans := &NetworkTransport{
 		connPool:     make(map[string][]*netConn),
 		consumeCh:    make(chan RPC),
-		logger:       log.New(logOutput, "", log.LstdFlags),
+		logger:       wrapper_logger,
 		maxPool:      maxPool,
 		shutdownCh:   make(chan struct{}),
 		stream:       stream,
@@ -258,11 +273,17 @@ func (n *NetworkTransport) AppendEntriesPipeline(target net.Addr) (AppendPipelin
 
 // AppendEntries implements the Transport interface.
 func (n *NetworkTransport) AppendEntries(target net.Addr, args *AppendEntriesRequest, resp *AppendEntriesResponse) error {
+	messagepayload := []byte("EntryPayload")
+	appendEntrySend = n.logger.PrepareSend("append entry request", messagepayload)
+	fmt.Println("sending entry request")
 	return n.genericRPC(target, rpcAppendEntries, args, resp)
 }
 
 // RequestVote implements the Transport interface.
 func (n *NetworkTransport) RequestVote(target net.Addr, args *RequestVoteRequest, resp *RequestVoteResponse) error {
+	messagepayload := []byte("votePayload")
+	reqVoteSend = n.logger.PrepareSend("vote request", messagepayload)
+	fmt.Println("sending vote request")
 	return n.genericRPC(target, rpcRequestVote, args, resp)
 }
 
@@ -310,6 +331,10 @@ func (n *NetworkTransport) InstallSnapshot(target net.Addr, args *InstallSnapsho
 		conn.conn.SetDeadline(time.Now().Add(timeout))
 	}
 
+	messagepayload := []byte("SnapshotPayload")
+	snapshotSend = n.logger.PrepareSend("snapshot request", messagepayload)
+	fmt.Println("sending snapshot req")
+
 	// Send the RPC
 	if err := sendRPC(conn, rpcInstallSnapshot, args); err != nil {
 		return err
@@ -353,10 +378,10 @@ func (n *NetworkTransport) listen() {
 			if n.IsShutdown() {
 				return
 			}
-			n.logger.Printf("[ERR] raft-net: Failed to accept connection: %v", err)
+			n.logger.print("[ERR] raft-net: Failed to accept connection: " + err.Error())
 			continue
 		}
-		n.logger.Printf("[DEBUG] raft-net: %v accepted connection from: %v", n.LocalAddr(), conn.RemoteAddr())
+		n.logger.print("[DEBUG] raft-net: " + n.LocalAddr().String() + " accepted connection from: " + conn.RemoteAddr().String())
 
 		// Handle the connection in dedicated routine
 		go n.handleConn(conn)
@@ -374,12 +399,12 @@ func (n *NetworkTransport) handleConn(conn net.Conn) {
 	for {
 		if err := n.handleCommand(r, dec, enc); err != nil {
 			if err != io.EOF {
-				n.logger.Printf("[ERR] raft-net: Failed to decode incoming command: %v", err)
+				n.logger.print("[ERR] raft-net: Failed to decode incoming command: " + err.Error())
 			}
 			return
 		}
 		if err := w.Flush(); err != nil {
-			n.logger.Printf("[ERR] raft-net: Failed to flush response: %v", err)
+			n.logger.print("[ERR] raft-net: Failed to flush response: " + err.Error())
 			return
 		}
 	}
@@ -394,6 +419,7 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 	}
 
 	// Create the RPC object
+	// Create a new channel with make(chan val-type). Channels are typed by the values they convey.
 	respCh := make(chan RPCResponse, 1)
 	rpc := RPC{
 		RespChan: respCh,
@@ -416,12 +442,20 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 			isHeartbeat = true
 		}
 
+		n.logger.UnpackReceive("Received append entry request", appendEntrySend)
+		n.logger.DisableLogging()
+		fmt.Println("received entry req")
+
 	case rpcRequestVote:
 		var req RequestVoteRequest
 		if err := dec.Decode(&req); err != nil {
 			return err
 		}
 		rpc.Command = &req
+
+		n.logger.UnpackReceive("Received request vote request", reqVoteSend)
+		n.logger.DisableLogging()
+		fmt.Println("received vote req")
 
 	case rpcInstallSnapshot:
 		var req InstallSnapshotRequest
@@ -430,6 +464,10 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 		}
 		rpc.Command = &req
 		rpc.Reader = io.LimitReader(r, req.Size)
+
+		n.logger.UnpackReceive("Received snapshot request", snapshotSend)
+		n.logger.DisableLogging()
+		fmt.Println("received snapshot req")
 
 	default:
 		return fmt.Errorf("unknown rpc type %d", rpcType)
@@ -456,6 +494,8 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 	// Wait for response
 RESP:
 	select {
+	// Send a value into a channel using the channel <- syntax. 
+	// The <-channel syntax receives a value from the channel. 
 	case resp := <-respCh:
 		// Send the error first
 		respErr := ""
