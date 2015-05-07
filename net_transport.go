@@ -273,17 +273,15 @@ func (n *NetworkTransport) AppendEntriesPipeline(target net.Addr) (AppendPipelin
 
 // AppendEntries implements the Transport interface.
 func (n *NetworkTransport) AppendEntries(target net.Addr, args *AppendEntriesRequest, resp *AppendEntriesResponse) error {
-	messagepayload := []byte("EntryPayload")
-	appendEntrySend = n.logger.PrepareSend("append entry request", messagepayload)
-	fmt.Println("sending entry request")
+	messagepayload := []byte("rpcAppendEntries")
+	appendEntrySend = n.logger.PrepareSend("Sending append entry command", messagepayload)
 	return n.genericRPC(target, rpcAppendEntries, args, resp)
 }
 
 // RequestVote implements the Transport interface.
 func (n *NetworkTransport) RequestVote(target net.Addr, args *RequestVoteRequest, resp *RequestVoteResponse) error {
-	messagepayload := []byte("votePayload")
-	reqVoteSend = n.logger.PrepareSend("vote request", messagepayload)
-	fmt.Println("sending vote request")
+	messagepayload := []byte("rpcRequestVote")
+	reqVoteSend = n.logger.PrepareSend("Requesting vote", messagepayload)
 	return n.genericRPC(target, rpcRequestVote, args, resp)
 }
 
@@ -331,9 +329,8 @@ func (n *NetworkTransport) InstallSnapshot(target net.Addr, args *InstallSnapsho
 		conn.conn.SetDeadline(time.Now().Add(timeout))
 	}
 
-	messagepayload := []byte("SnapshotPayload")
-	snapshotSend = n.logger.PrepareSend("snapshot request", messagepayload)
-	fmt.Println("sending snapshot req")
+	messagepayload := []byte("rpcInstallSnapshot")
+	snapshotSend = n.logger.PrepareSend("Sending snapshot", messagepayload)
 
 	// Send the RPC
 	if err := sendRPC(conn, rpcInstallSnapshot, args); err != nil {
@@ -442,9 +439,8 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 			isHeartbeat = true
 		}
 
-		n.logger.UnpackReceive("Received append entry request", appendEntrySend)
+		n.logger.UnpackReceive("Received append entry command", appendEntrySend)
 		n.logger.DisableLogging()
-		fmt.Println("received entry req")
 
 	case rpcRequestVote:
 		var req RequestVoteRequest
@@ -453,9 +449,8 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 		}
 		rpc.Command = &req
 
-		n.logger.UnpackReceive("Received request vote request", reqVoteSend)
+		n.logger.UnpackReceive("Received request for vote", reqVoteSend)
 		n.logger.DisableLogging()
-		fmt.Println("received vote req")
 
 	case rpcInstallSnapshot:
 		var req InstallSnapshotRequest
@@ -465,9 +460,8 @@ func (n *NetworkTransport) handleCommand(r *bufio.Reader, dec *codec.Decoder, en
 		rpc.Command = &req
 		rpc.Reader = io.LimitReader(r, req.Size)
 
-		n.logger.UnpackReceive("Received snapshot request", snapshotSend)
+		n.logger.UnpackReceive("Received snapshot", snapshotSend)
 		n.logger.DisableLogging()
-		fmt.Println("received snapshot req")
 
 	default:
 		return fmt.Errorf("unknown rpc type %d", rpcType)

@@ -1186,13 +1186,13 @@ func (r *Raft) processLog(l *Log, future *logFuture, precommit bool) {
 func (r *Raft) processRPC(rpc RPC) {
 	switch cmd := rpc.Command.(type) {
 	case *AppendEntriesRequest:
-		//r.wrapper_logger.UnpackReceive("entry request", appendEntrySend)
+		//r.wrapper_logger.UnpackReceive("Received append entry command", appendEntrySend)
 		r.appendEntries(rpc, cmd)
 	case *RequestVoteRequest:
-		//r.wrapper_logger.UnpackReceive("vote request", reqVoteSend)
+		//r.wrapper_logger.UnpackReceive("Received request for vote", reqVoteSend)
 		r.requestVote(rpc, cmd)
 	case *InstallSnapshotRequest:
-		//r.wrapper_logger.UnpackReceive("snapshot request", snapshotSend)
+		//r.wrapper_logger.UnpackReceive("Received snapshot", snapshotSend)
 		r.installSnapshot(rpc, cmd)
 	default:
 		r.wrapper_logger.print("[ERR] raft: Got unexpected command")
@@ -1323,8 +1323,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	defer metrics.MeasureSince([]string{"raft", "rpc", "requestVote"}, time.Now())
 
-	r.wrapper_logger.UnpackReceive("Receiving vote request", reqVoteSend)
-	fmt.Println("req received")
+	r.wrapper_logger.UnpackReceive("Received request for vote", reqVoteSend)
 
 	// Setup a response
 	resp := &RequestVoteResponse{
@@ -1510,9 +1509,8 @@ func (r *Raft) electSelf() <-chan *RequestVoteResponse {
 	// Create a response channel
 	respCh := make(chan *RequestVoteResponse, len(r.peers)+1)
 
-	messagepayload := []byte("ReqVotePayload")
+	messagepayload := []byte("rpcRequestVote")
 	reqVoteSend = r.wrapper_logger.PrepareSend("Requesting vote", messagepayload)
-	fmt.Println("sending req")
 
 	// Increment the term
 	r.setCurrentTerm(r.getCurrentTerm() + 1)
